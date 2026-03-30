@@ -57,7 +57,7 @@ async function generatePlugin(prompt, version) {
       model: MODEL,
       messages,
       temperature: 0.4,
-      max_tokens: 8000,
+      max_tokens: 4000,
       stream: false
     },
     {
@@ -67,7 +67,11 @@ async function generatePlugin(prompt, version) {
       },
       timeout: 120000
     }
-  );
+  ).catch(err => {
+    // If SambaNova fails, log and re-throw the detailed error instead of generic 500 code
+    const aiError = err.response?.data?.error?.message || err.response?.data || err.message;
+    throw new Error(`SambaNova AI Error: ${typeof aiError === 'object' ? JSON.stringify(aiError) : aiError}`);
+  });
 
   const content = response.data.choices[0]?.message?.content;
   if (!content) throw new Error('No content returned from SambaNova API');
@@ -106,7 +110,7 @@ Return ONLY the corrected JSON object in the same format. Fix every error.`;
         { role: 'user', content: fixPrompt }
       ],
       temperature: 0.2,
-      max_tokens: 8000,
+      max_tokens: 4000,
       stream: false
     },
     {
