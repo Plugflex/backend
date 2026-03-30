@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: '*', // Allow requests from any origin (e.g. Netlify)
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
