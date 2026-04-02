@@ -141,7 +141,10 @@ async function updatePlugin(currentPluginData, prompt, version) {
 CURRENT PLUGIN JSON:
 ${JSON.stringify(currentPluginData, null, 2)}
 
-Return the COMPLETE updated plugin JSON, including all unchanged files alongside the modified or newly added ones. Do NOT remove files unless they are specifically meant to be deleted to fulfill the request. Maintain the exact same JSON structure.`;
+Return a JSON object with at least the "files" array. 
+CRITICAL RULE: YOU MUST ONLY INCLUDE FILES THAT YOU ARE UPDATING OR NEWLY CREATING! 
+Do NOT include files that remain unchanged. If a file is unchanged, completely omit it from your response's "files" array to save space!
+If the user asks you to write "all the codes" or "implement the functionality", provide the updated or new files necessary to achieve that. Maintain the exact same JSON format for the files you do return.`;
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -175,12 +178,31 @@ Return the COMPLETE updated plugin JSON, including all unchanged files alongside
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('Invalid response format from AI — expected JSON object');
 
-  const pluginData = JSON.parse(jsonMatch[0]);
-  if (!pluginData.files || !Array.isArray(pluginData.files)) {
-    throw new Error('Invalid plugin data structure — missing files array');
+  const newPluginData = JSON.parse(jsonMatch[0]);
+  if (!newPluginData.files || !Array.isArray(newPluginData.files)) {
+    throw new Error('Invalid plugin data structure — missing files array in AI response');
   }
 
-  return pluginData;
+  // Merge the new/modified files back into the original plugin data
+  const mergedPluginData = { ...currentPluginData };
+  if (newPluginData.pluginName) mergedPluginData.pluginName = newPluginData.pluginName;
+  if (newPluginData.description) mergedPluginData.description = newPluginData.description;
+  if (newPluginData.commands) mergedPluginData.commands = newPluginData.commands;
+  if (newPluginData.permissions) mergedPluginData.permissions = newPluginData.permissions;
+
+  for (const newFile of newPluginData.files) {
+    const existingIdx = mergedPluginData.files.findIndex(f => 
+      (f.path && newFile.path && f.path === newFile.path) || 
+      (f.name && newFile.name && f.name === newFile.name)
+    );
+    if (existingIdx !== -1) {
+      mergedPluginData.files[existingIdx] = { ...mergedPluginData.files[existingIdx], ...newFile };
+    } else {
+      mergedPluginData.files.push(newFile);
+    }
+  }
+
+  return mergedPluginData;
 }
 
 module.exports = { generatePlugin, fixPluginErrors, updatePlugin };
