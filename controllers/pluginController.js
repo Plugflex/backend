@@ -193,7 +193,7 @@ ${existingFile ? `Existing file content:\n\`\`\`\n${existingFile.content}\n\`\`\
 
 CRITICAL RULES:
 1. ONLY return a JSON object with a "files" array containing EXACTLY this ONE file.
-2. NO PLACEHOLDERS ALLOWED. Write the entire file completely from top to bottom. Do not use "// Handle logic here" or similar placeholders.
+2. EXPAND ALL PLACEHOLDERS: If the Existing file content contains any placeholders or "TODO" comments (e.g. "// Handle logic here", "// Initialize plugin"), YOU MUST REPLACE THEM with the actual fully working code! NEVER output placeholders. Write the entire file completely from top to bottom.
 3. Keep the exact same JSON format as previously defined.`;
 
     const fileResponse = await axios.post(
