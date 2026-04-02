@@ -41,6 +41,36 @@ RULES:
 
 Generate ONLY the JSON object. No markdown, no explanations outside the JSON.`;
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function callSambaNovaWithRetry(payload, headers, maxRetries = 4) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const response = await axios.post(
+        SAMBANOVA_URL,
+        payload,
+        { headers, timeout: 120000 }
+      );
+      return response;
+    } catch (err) {
+      const status = err.response?.status;
+      const errorMsg = err.response?.data?.error?.message || err.message;
+      if (status === 429 || errorMsg.toLowerCase().includes('rate limit')) {
+        attempt++;
+        if (attempt >= maxRetries) {
+          throw new Error(`SambaNova AI Error: Rate limit exceeded. Please try again later.`);
+        }
+        const delay = attempt * 2500; // 2.5s, 5s, 7.5s, 10s wait
+        await sleep(delay);
+      } else {
+        const aiError = err.response?.data?.error?.message || err.response?.data || err.message;
+        throw new Error(`SambaNova AI Error: ${typeof aiError === 'object' ? JSON.stringify(aiError) : aiError}`);
+      }
+    }
+  }
+}
+
 async function generatePlugin(prompt, version) {
   const apiKey = process.env.SAMBANOVA_API_KEY;
   if (!apiKey || apiKey === 'your_sambanova_api_key_here') {
@@ -52,8 +82,7 @@ async function generatePlugin(prompt, version) {
     { role: 'user', content: `Generate a complete Minecraft plugin for version ${version}.\n\nDescription: ${prompt}\n\nMake sure to write code compatible with Paper/Spigot API ${version}. Respond ONLY with the JSON object as specified.` }
   ];
 
-  const response = await axios.post(
-    SAMBANOVA_URL,
+  const response = await callSambaNovaWithRetry(
     {
       model: MODEL,
       messages,
@@ -62,17 +91,10 @@ async function generatePlugin(prompt, version) {
       stream: false
     },
     {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 120000
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
     }
-  ).catch(err => {
-    // If SambaNova fails, log and re-throw the detailed error instead of generic 500 code
-    const aiError = err.response?.data?.error?.message || err.response?.data || err.message;
-    throw new Error(`SambaNova AI Error: ${typeof aiError === 'object' ? JSON.stringify(aiError) : aiError}`);
-  });
+  );
 
   const content = response.data.choices[0]?.message?.content;
   if (!content) throw new Error('No content returned from SambaNova API');
@@ -102,8 +124,7 @@ ${errors}
 
 Return ONLY the corrected JSON object in the same format. Fix every error.`;
 
-  const response = await axios.post(
-    SAMBANOVA_URL,
+  const response = await callSambaNovaWithRetry(
     {
       model: MODEL,
       messages: [
@@ -115,11 +136,8 @@ Return ONLY the corrected JSON object in the same format. Fix every error.`;
       stream: false
     },
     {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 120000
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
     }
   );
 
@@ -149,8 +167,7 @@ Which files need to be modified or created to fulfill this instruction?
 Return ONLY a JSON array of file paths as strings. You can return up to 15 file paths at once if an extensive system is required! Do not return code, only the array of strings. 
 Example response: ["src/main/java/com/example/Main.java", "src/main/resources/config.yml"]`;
 
-  const planResponse = await axios.post(
-    SAMBANOVA_URL,
+  const planResponse = await callSambaNovaWithRetry(
     {
       model: MODEL,
       messages: [{ role: 'system', content: "Respond ONLY with a JSON array." }, { role: 'user', content: planPrompt }],
@@ -158,8 +175,8 @@ Example response: ["src/main/java/com/example/Main.java", "src/main/resources/co
       max_tokens: 1000,
       stream: false
     },
-    { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
-  ).catch(err => { throw new Error(`Planner AI Error: ${err.message}`); });
+    { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+  );
 
   const planContent = planResponse.data.choices[0]?.message?.content;
   const arrayMatch = planContent.match(/\[[\s\S]*\]/);
@@ -196,8 +213,7 @@ CRITICAL RULES:
 2. EXPAND ALL PLACEHOLDERS: If the Existing file content contains any placeholders or "TODO" comments (e.g. "// Handle logic here", "// Initialize plugin"), YOU MUST REPLACE THEM with the actual fully working code! NEVER output placeholders. Write the entire file completely from top to bottom.
 3. Keep the exact same JSON format as previously defined.`;
 
-    const fileResponse = await axios.post(
-      SAMBANOVA_URL,
+    const fileResponse = await callSambaNovaWithRetry(
       {
         model: MODEL,
         messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: filePrompt }],
@@ -205,8 +221,8 @@ CRITICAL RULES:
         max_tokens: 8000,
         stream: false
       },
-      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
-    ).catch(err => { throw new Error(`File Coder AI Error: ${err.message}`); });
+      { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }
+    );
 
     const fileContent = fileResponse.data.choices[0]?.message?.content;
     const jsonMatch = fileContent.match(/\{[\s\S]*\}/);
