@@ -16,6 +16,11 @@ router.post('/generate-plugin', async (req, res) => {
     console.log(`[PluginForge] Generating plugin for: "${prompt}" (Version: ${version || '1.20+'})`);
     const pluginData = await generatePlugin(prompt.trim(), version || '1.20+');
     
+    // Inject build.gradle, settings.gradle, and pom.xml into the plugin files structure
+    pluginData.files.push({ name: 'build.gradle', path: 'build.gradle', content: generateBuildGradle(pluginData, version || '1.20+'), language: 'gradle' });
+    pluginData.files.push({ name: 'settings.gradle', path: 'settings.gradle', content: generateSettingsGradle(pluginData), language: 'gradle' });
+    pluginData.files.push({ name: 'pom.xml', path: 'pom.xml', content: generatePomXml(pluginData, version || '1.20+'), language: 'xml' });
+
     console.log(`[PluginForge] Generated: ${pluginData.pluginName} with ${pluginData.files.length} files`);
     res.json({ success: true, plugin: pluginData });
 
@@ -25,6 +30,39 @@ router.post('/generate-plugin', async (req, res) => {
       success: false, 
       error: err.message || 'Failed to generate plugin. Please try again.' 
     });
+  }
+});
+
+// POST /api/update-plugin
+router.post('/update-plugin', async (req, res) => {
+  try {
+    const { prompt, pluginData, version } = req.body;
+    if (!prompt || prompt.trim().length < 3) {
+      return res.status(400).json({ success: false, error: 'Please provide instructions for what to change.' });
+    }
+    if (!pluginData) {
+      return res.status(400).json({ success: false, error: 'No existing plugin data provided.' });
+    }
+
+    // Remove the injected build files so the AI doesn't get confused or try to overwrite them unnecessarily
+    const filteredFiles = pluginData.files.filter(f => !['build.gradle', 'settings.gradle', 'pom.xml'].includes(f.name));
+    const cleanPluginData = { ...pluginData, files: filteredFiles };
+
+    console.log(`[PluginForge] Updating plugin: "${prompt}"`);
+    const { updatePlugin } = require('../controllers/pluginController');
+    const updatedPluginData = await updatePlugin(cleanPluginData, prompt.trim(), version || '1.20+');
+    
+    // Re-inject build files
+    updatedPluginData.files.push({ name: 'build.gradle', path: 'build.gradle', content: generateBuildGradle(updatedPluginData, version || '1.20+'), language: 'gradle' });
+    updatedPluginData.files.push({ name: 'settings.gradle', path: 'settings.gradle', content: generateSettingsGradle(updatedPluginData), language: 'gradle' });
+    updatedPluginData.files.push({ name: 'pom.xml', path: 'pom.xml', content: generatePomXml(updatedPluginData, version || '1.20+'), language: 'xml' });
+
+    console.log(`[PluginForge] Updated: ${updatedPluginData.pluginName} with ${updatedPluginData.files.length} files`);
+    res.json({ success: true, plugin: updatedPluginData });
+
+  } catch (err) {
+    console.error('[PluginForge] Update error:', err.message);
+    res.status(500).json({ success: false, error: err.message || 'Failed to update plugin.' });
   }
 });
 
@@ -38,14 +76,15 @@ router.post('/download-zip', async (req, res) => {
 
     console.log(`[PluginForge] Building ZIP for: ${pluginName} (${buildSystem || 'Maven'})`);
 
-    // Inject build files into the zip
+    // build.gradle and pom.xml might already be in files from generate-plugin
     const filesToZip = [...files];
     const dummyPluginData = { pluginName, version: '1.0.0' };
     
-    if (buildSystem === 'Gradle') {
+    const hasGradle = files.some(f => f.name === 'build.gradle');
+    if (buildSystem === 'Gradle' && !hasGradle) {
       filesToZip.push({ path: 'build.gradle', content: generateBuildGradle(dummyPluginData, version || '1.20.4') });
       filesToZip.push({ path: 'settings.gradle', content: generateSettingsGradle(dummyPluginData) });
-    } else {
+    } else if (buildSystem !== 'Gradle' && !files.some(f => f.name === 'pom.xml')) {
       filesToZip.push({ path: 'pom.xml', content: generatePomXml(dummyPluginData, version || '1.20.4') });
     }
 

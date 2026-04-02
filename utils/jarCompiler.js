@@ -165,7 +165,8 @@ async function writeFilesToTemp(pluginData, tempDir, version, buildSystem) {
 function runMaven(tempDir) {
   return new Promise((resolve, reject) => {
     const mvnCmd = process.platform === 'win32' ? 'mvn.cmd' : 'mvn';
-    exec(`${mvnCmd} package -q`, { cwd: tempDir, timeout: 120000 }, (error, stdout, stderr) => {
+    // Use multi-threading to speed up maven
+    exec(`${mvnCmd} package -q -T 1C`, { cwd: tempDir, timeout: 120000 }, (error, stdout, stderr) => {
       if (error) {
         reject({ error: error.message, stdout, stderr });
       } else {
@@ -181,7 +182,8 @@ function runMaven(tempDir) {
 function runGradle(tempDir) {
   return new Promise((resolve, reject) => {
     const gradleCmd = process.platform === 'win32' ? 'gradle.bat' : 'gradle';
-    exec(`${gradleCmd} build -q`, { cwd: tempDir, timeout: 120000 }, (error, stdout, stderr) => {
+    // Use parallel and build cache to speed up
+    exec(`${gradleCmd} build -q --parallel --build-cache`, { cwd: tempDir, timeout: 120000 }, (error, stdout, stderr) => {
       if (error) {
         reject({ error: error.message, stdout, stderr });
       } else {

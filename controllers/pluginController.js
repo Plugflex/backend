@@ -57,7 +57,7 @@ async function generatePlugin(prompt, version) {
       model: MODEL,
       messages,
       temperature: 0.4,
-      max_tokens: 4000,
+      max_tokens: 8000,
       stream: false
     },
     {
@@ -90,7 +90,7 @@ async function generatePlugin(prompt, version) {
 
 async function fixPluginErrors(pluginData, errors) {
   const apiKey = process.env.SAMBANOVA_API_KEY;
-  
+
   const fixPrompt = `The following Minecraft plugin has compilation errors. Fix ALL errors and return the COMPLETE corrected plugin JSON.
 
 PLUGIN DATA:
@@ -110,7 +110,7 @@ Return ONLY the corrected JSON object in the same format. Fix every error.`;
         { role: 'user', content: fixPrompt }
       ],
       temperature: 0.2,
-      max_tokens: 4000,
+      max_tokens: 8000,
       stream: false
     },
     {
@@ -129,4 +129,58 @@ Return ONLY the corrected JSON object in the same format. Fix every error.`;
   return JSON.parse(jsonMatch[0]);
 }
 
-module.exports = { generatePlugin, fixPluginErrors };
+async function updatePlugin(currentPluginData, prompt, version) {
+  const apiKey = process.env.SAMBANOVA_API_KEY;
+  if (!apiKey || apiKey === 'your_sambanova_api_key_here') {
+    throw new Error('SambaNova API key not configured.');
+  }
+
+  const updatePrompt = `You are updating a Minecraft plugin. The user wants the following modifications:
+"${prompt}"
+
+CURRENT PLUGIN JSON:
+${JSON.stringify(currentPluginData, null, 2)}
+
+Return the COMPLETE updated plugin JSON, including all unchanged files alongside the modified or newly added ones. Do NOT remove files unless they are specifically meant to be deleted to fulfill the request. Maintain the exact same JSON structure.`;
+
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: updatePrompt }
+  ];
+
+  const response = await axios.post(
+    SAMBANOVA_URL,
+    {
+      model: MODEL,
+      messages,
+      temperature: 0.4,
+      max_tokens: 8000,
+      stream: false
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 120000
+    }
+  ).catch(err => {
+    const aiError = err.response?.data?.error?.message || err.response?.data || err.message;
+    throw new Error(`SambaNova AI Error: ${typeof aiError === 'object' ? JSON.stringify(aiError) : aiError}`);
+  });
+
+  const content = response.data.choices[0]?.message?.content;
+  if (!content) throw new Error('No content returned from SambaNova API');
+
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('Invalid response format from AI — expected JSON object');
+
+  const pluginData = JSON.parse(jsonMatch[0]);
+  if (!pluginData.files || !Array.isArray(pluginData.files)) {
+    throw new Error('Invalid plugin data structure — missing files array');
+  }
+
+  return pluginData;
+}
+
+module.exports = { generatePlugin, fixPluginErrors, updatePlugin };
