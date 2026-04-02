@@ -130,82 +130,109 @@ Return ONLY the corrected JSON object in the same format. Fix every error.`;
   return JSON.parse(jsonMatch[0]);
 }
 
-async function updatePlugin(currentPluginData, prompt, version) {
+async function updatePluginSSE(currentPluginData, prompt, version, sendEvent) {
   const apiKey = process.env.SAMBANOVA_API_KEY;
   if (!apiKey || apiKey === 'your_sambanova_api_key_here') {
     throw new Error('SambaNova API key not configured.');
   }
 
-  const updatePrompt = `You are updating a Minecraft plugin. The user wants the following modifications:
+  // Step 1: Execution Planner
+  sendEvent({ type: 'progress', message: `🔍 Analyzing request to create execution plan...` });
+  
+  const planPrompt = `You are updating a Minecraft plugin. The user wants the following modifications:
 "${prompt}"
 
 CURRENT PLUGIN JSON:
 ${JSON.stringify(currentPluginData, null, 2)}
 
-Return a JSON object with at least the "files" array. 
-CRITICAL RULES:
-1. YOU MUST ONLY INCLUDE FILES THAT YOU ARE UPDATING OR NEWLY CREATING! Do NOT include files that remain unchanged.
-2. NO PLACEHOLDERS ALLOWED: When you update a file, you MUST write the entire file code completely without skipping sections.
-3. FILE LIMIT: You can ONLY return a MAXIMUM OF 3 FILES per response. If there are more than 3 files to write, just write the first 3 completely, and tell the user you'll do the rest later. DO NOT truncate files!
-If the user asks you to write "all the codes", pick the top 3 unwritten classes and write them COMPLETELY. Avoid partial generation at all costs. Maintain the exact same JSON format.`;
+Which files need to be modified or created to fulfill this instruction? 
+Return ONLY a JSON array of file paths as strings. Maximum 3 files. Do not return code, only the array of strings. 
+Example response: ["src/main/java/com/example/Main.java", "src/main/resources/config.yml"]`;
 
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: updatePrompt }
-  ];
-
-  const response = await axios.post(
+  const planResponse = await axios.post(
     SAMBANOVA_URL,
     {
       model: MODEL,
-      messages,
-      temperature: 0.4,
-      max_tokens: 8000,
+      messages: [{ role: 'system', content: "Respond ONLY with a JSON array." }, { role: 'user', content: planPrompt }],
+      temperature: 0.1,
+      max_tokens: 1000,
       stream: false
     },
-    {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 120000
-    }
-  ).catch(err => {
-    const aiError = err.response?.data?.error?.message || err.response?.data || err.message;
-    throw new Error(`SambaNova AI Error: ${typeof aiError === 'object' ? JSON.stringify(aiError) : aiError}`);
-  });
+    { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
+  ).catch(err => { throw new Error(`Planner AI Error: ${err.message}`); });
 
-  const content = response.data.choices[0]?.message?.content;
-  if (!content) throw new Error('No content returned from SambaNova API');
-
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('Invalid response format from AI — expected JSON object');
-
-  const newPluginData = JSON.parse(jsonMatch[0]);
-  if (!newPluginData.files || !Array.isArray(newPluginData.files)) {
-    throw new Error('Invalid plugin data structure — missing files array in AI response');
+  const planContent = planResponse.data.choices[0]?.message?.content;
+  const arrayMatch = planContent.match(/\[[\s\S]*\]/);
+  if (!arrayMatch) throw new Error('AI Planner failed to return an array of file paths.');
+  
+  let filesToEdit = [];
+  try {
+    filesToEdit = JSON.parse(arrayMatch[0]);
+  } catch(e) {
+    throw new Error('AI Planner returned invalid JSON array.');
   }
 
-  // Merge the new/modified files back into the original plugin data
-  const mergedPluginData = { ...currentPluginData };
-  if (newPluginData.pluginName) mergedPluginData.pluginName = newPluginData.pluginName;
-  if (newPluginData.description) mergedPluginData.description = newPluginData.description;
-  if (newPluginData.commands) mergedPluginData.commands = newPluginData.commands;
-  if (newPluginData.permissions) mergedPluginData.permissions = newPluginData.permissions;
+  if (filesToEdit.length === 0) {
+    sendEvent({ type: 'progress', message: `No files needed modifying.` });
+    return currentPluginData;
+  }
 
-  for (const newFile of newPluginData.files) {
-    const existingIdx = mergedPluginData.files.findIndex(f => 
-      (f.path && newFile.path && f.path === newFile.path) || 
-      (f.name && newFile.name && f.name === newFile.name)
-    );
-    if (existingIdx !== -1) {
-      mergedPluginData.files[existingIdx] = { ...mergedPluginData.files[existingIdx], ...newFile };
-    } else {
-      mergedPluginData.files.push(newFile);
+  sendEvent({ type: 'progress', message: `📝 Planner intends to edit ${filesToEdit.length} files.` });
+
+  // Step 2: Extracting Files
+  const mergedPluginData = { ...currentPluginData };
+
+  for (const filePath of filesToEdit) {
+    sendEvent({ type: 'progress', message: `✨ Coding ${filePath}...` });
+    
+    // Find if the file already exists to give the AI context if needed
+    const existingFile = mergedPluginData.files.find(f => f.path === filePath || f.name === filePath.split('/').pop());
+    
+    const filePrompt = `Update or create the file "${filePath}" to fulfill the user's request: "${prompt}".
+${existingFile ? `Existing file content:\n\`\`\`\n${existingFile.content}\n\`\`\`` : 'This is a new file.'}
+
+CRITICAL RULES:
+1. ONLY return a JSON object with a "files" array containing EXACTLY this ONE file.
+2. NO PLACEHOLDERS ALLOWED. Write the entire file completely from top to bottom. Do not use "// Handle logic here" or similar placeholders.
+3. Keep the exact same JSON format as previously defined.`;
+
+    const fileResponse = await axios.post(
+      SAMBANOVA_URL,
+      {
+        model: MODEL,
+        messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: filePrompt }],
+        temperature: 0.2,
+        max_tokens: 8000,
+        stream: false
+      },
+      { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
+    ).catch(err => { throw new Error(`File Coder AI Error: ${err.message}`); });
+
+    const fileContent = fileResponse.data.choices[0]?.message?.content;
+    const jsonMatch = fileContent.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+       sendEvent({ type: 'progress', message: `⚠️ Failed to structure ${filePath}, skipping.` });
+       continue;
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.files && parsed.files.length > 0) {
+        const newFile = parsed.files[0];
+        const existingIdx = mergedPluginData.files.findIndex(f => f.path === newFile.path || f.name === newFile.name);
+        if (existingIdx !== -1) {
+          mergedPluginData.files[existingIdx] = { ...mergedPluginData.files[existingIdx], ...newFile };
+        } else {
+          mergedPluginData.files.push(newFile);
+        }
+        sendEvent({ type: 'file_updated', filePath: newFile.path || newFile.name });
+      }
+    } catch(e) {
+      sendEvent({ type: 'progress', message: `⚠️ Corrupt generation for ${filePath}.` });
     }
   }
 
   return mergedPluginData;
 }
 
-module.exports = { generatePlugin, fixPluginErrors, updatePlugin };
+module.exports = { generatePlugin, fixPluginErrors, updatePluginSSE };
