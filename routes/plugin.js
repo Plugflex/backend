@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const fs = require('fs-extra');
-const { generatePlugin } = require('../controllers/pluginController');
+const { generatePlugin, updatePluginSSE } = require('../controllers/pluginController');
 const { buildZip } = require('../utils/zipBuilder');
 const { compilePlugin, generatePomXml, generateBuildGradle, generateSettingsGradle } = require('../utils/jarCompiler');
 
@@ -35,34 +35,41 @@ router.post('/generate-plugin', async (req, res) => {
 
 // POST /api/update-plugin
 router.post('/update-plugin', async (req, res) => {
+  const { prompt, pluginData, version } = req.body;
+  if (!prompt || prompt.trim().length < 3) {
+    return res.status(400).json({ success: false, error: 'Please provide instructions for what to change.' });
+  }
+  if (!pluginData) {
+    return res.status(400).json({ success: false, error: 'No existing plugin data provided.' });
+  }
+
+  // Remove the injected build files so the AI doesn't get confused
+  const filteredFiles = pluginData.files.filter(f => !['build.gradle', 'settings.gradle', 'pom.xml'].includes(f.name));
+  const cleanPluginData = { ...pluginData, files: filteredFiles };
+
+  // Setup SSE
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
   try {
-    const { prompt, pluginData, version } = req.body;
-    if (!prompt || prompt.trim().length < 3) {
-      return res.status(400).json({ success: false, error: 'Please provide instructions for what to change.' });
-    }
-    if (!pluginData) {
-      return res.status(400).json({ success: false, error: 'No existing plugin data provided.' });
-    }
-
-    // Remove the injected build files so the AI doesn't get confused or try to overwrite them unnecessarily
-    const filteredFiles = pluginData.files.filter(f => !['build.gradle', 'settings.gradle', 'pom.xml'].includes(f.name));
-    const cleanPluginData = { ...pluginData, files: filteredFiles };
-
-    console.log(`[PluginForge] Updating plugin: "${prompt}"`);
-    const { updatePlugin } = require('../controllers/pluginController');
-    const updatedPluginData = await updatePlugin(cleanPluginData, prompt.trim(), version || '1.20+');
+    sendEvent({ type: 'progress', message: `🚀 Starting update process...` });
+    const updatedPluginData = await updatePluginSSE(cleanPluginData, prompt.trim(), version || '1.20+', sendEvent);
     
     // Re-inject build files
     updatedPluginData.files.push({ name: 'build.gradle', path: 'build.gradle', content: generateBuildGradle(updatedPluginData, version || '1.20+'), language: 'gradle' });
     updatedPluginData.files.push({ name: 'settings.gradle', path: 'settings.gradle', content: generateSettingsGradle(updatedPluginData), language: 'gradle' });
     updatedPluginData.files.push({ name: 'pom.xml', path: 'pom.xml', content: generatePomXml(updatedPluginData, version || '1.20+'), language: 'xml' });
 
-    console.log(`[PluginForge] Updated: ${updatedPluginData.pluginName} with ${updatedPluginData.files.length} files`);
-    res.json({ success: true, plugin: updatedPluginData });
-
+    sendEvent({ type: 'complete', plugin: updatedPluginData });
   } catch (err) {
     console.error('[PluginForge] Update error:', err.message);
-    res.status(500).json({ success: false, error: err.message || 'Failed to update plugin.' });
+    sendEvent({ type: 'error', message: err.message || 'Failed to update plugin.' });
+  } finally {
+    res.end();
   }
 });
 
