@@ -146,7 +146,7 @@ CURRENT PLUGIN JSON:
 ${JSON.stringify(currentPluginData, null, 2)}
 
 Which files need to be modified or created to fulfill this instruction? 
-Return ONLY a JSON array of file paths as strings. Maximum 3 files. Do not return code, only the array of strings. 
+Return ONLY a JSON array of file paths as strings. You can return up to 15 file paths at once if an extensive system is required! Do not return code, only the array of strings. 
 Example response: ["src/main/java/com/example/Main.java", "src/main/resources/config.yml"]`;
 
   const planResponse = await axios.post(
